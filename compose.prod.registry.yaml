@@ -1,0 +1,155 @@
+services:
+  web:
+    image: ${REGISTRY:-ghcr.io/yourorg}/24seven-management-app-nginx:${APP_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - 24seven-management-app-storage-production:/var/www/storage:ro
+      - 24seven-management-app-public-assets:/var/www/public/build:ro
+    networks:
+      - 24seven-management-app-production
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    depends_on:
+      php-fpm:
+        condition: service_healthy
+
+  php-fpm:
+    image: ${REGISTRY:-ghcr.io/yourorg}/24seven-management-app-php:${APP_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - 24seven-management-app-public-assets:/var/www/public/build
+      - 24seven-management-app-storage-production:/var/www/storage
+    env_file:
+      - .env
+    networks:
+      - 24seven-management-app-production
+    healthcheck:
+      test: ["CMD-SHELL", "php-fpm-healthcheck || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  horizon:
+    image: ${REGISTRY:-ghcr.io/yourorg}/24seven-management-app-php:${APP_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - 24seven-management-app-storage-production:/var/www/storage
+    env_file:
+      - .env
+    networks:
+      - 24seven-management-app-production
+    depends_on:
+      php-fpm:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    entrypoint: []
+    command: ["php", "artisan", "horizon"]
+    stop_signal: SIGTERM
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "php artisan horizon:status | grep -q running || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  reverb:
+    image: ${REGISTRY:-ghcr.io/yourorg}/24seven-management-app-php:${APP_VERSION:-latest}
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - 24seven-management-app-production
+    ports:
+      - "${REVERB_HOST_PORT:-9090}:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: []
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+
+  scheduler:
+    image: ${REGISTRY:-ghcr.io/yourorg}/24seven-management-app-php:${APP_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - 24seven-management-app-storage-production:/var/www/storage
+    env_file:
+      - .env
+    networks:
+      - 24seven-management-app-production
+    depends_on:
+      php-fpm:
+        condition: service_healthy
+    entrypoint: []
+    command: ["php", "artisan", "schedule:work"]
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.ml.enabled=false
+      - ES_JAVA_OPTS=${ES_JAVA_OPTS:--Xms1g -Xmx1g}
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch-data-production:/usr/share/elasticsearch/data
+    networks:
+      - 24seven-management-app-production
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    user: postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_DB=${DB_DATABASE:-app}
+      - POSTGRES_USER=${DB_USERNAME:-app}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-secret}
+    volumes:
+      - postgres-data-production:/var/lib/postgresql/data
+    networks:
+      - 24seven-management-app-production
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data-production:/data
+    networks:
+      - 24seven-management-app-production
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  24seven-management-app-production:
+
+volumes:
+  postgres-data-production:
+  redis-data-production:
+  elasticsearch-data-production:
+  24seven-management-app-storage-production:
+  24seven-management-app-public-assets:
